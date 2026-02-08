@@ -25,6 +25,8 @@ const originalInfo = document.getElementById('originalInfo');
 const processedInfo = document.getElementById('processedInfo');
 const downloadBtn = document.getElementById('downloadBtn');
 const resetBtn = document.getElementById('resetBtn');
+const selectFolderBtn = document.getElementById('selectFolderBtn');
+const folderStatus = document.getElementById('folderStatus');
 
 /**
  * initialize the application
@@ -89,6 +91,7 @@ function setupEventListeners() {
 
     downloadAllBtn.addEventListener('click', downloadAll);
     resetBtn.addEventListener('click', reset);
+    selectFolderBtn.addEventListener('click', handleFolderSelect);
 }
 
 function reset() {
@@ -255,7 +258,7 @@ async function processQueue() {
                         const statusEl = document.getElementById(`status-${item.id}`);
                         if (statusEl) statusEl.innerHTML += `<p class="inline-block mt-1 text-xs md:text-sm text-warn">${status}</p>`;
                     }
-                }).catch(() => {});
+                }).catch(() => { });
             } catch (error) {
                 item.status = 'error';
                 updateStatus(item.id, i18n.t('status.failed'));
@@ -308,4 +311,164 @@ async function downloadAll() {
     a.click();
 }
 
+/**
+ * 显示文件夹处理状态
+ */
+function showFolderStatus(message, type = 'info') {
+    folderStatus.classList.remove('hidden', 'text-gray-500', 'text-emerald-600', 'text-red-500');
+    switch (type) {
+        case 'success':
+            folderStatus.classList.add('text-emerald-600');
+            break;
+        case 'error':
+            folderStatus.classList.add('text-red-500');
+            break;
+        default:
+            folderStatus.classList.add('text-gray-500');
+    }
+    folderStatus.textContent = message;
+}
+
+/**
+ * 隐藏文件夹处理状态
+ */
+function hideFolderStatus() {
+    folderStatus.classList.add('hidden');
+    folderStatus.textContent = '';
+}
+
+/**
+ * 处理文件夹选择
+ */
+async function handleFolderSelect() {
+    // 检查浏览器是否支持 File System Access API
+    if (!('showDirectoryPicker' in window)) {
+        showFolderStatus(i18n.t('folder.notSupported'), 'error');
+        return;
+    }
+
+    try {
+        // 第一步：选择源文件夹
+        const srcDirHandle = await window.showDirectoryPicker({
+            mode: 'read'
+        });
+
+        // 收集所有图片文件
+        const imageFiles = [];
+        await collectImageFiles(srcDirHandle, imageFiles);
+
+        if (imageFiles.length === 0) {
+            showFolderStatus(i18n.t('folder.noImages'), 'error');
+            return;
+        }
+
+        // 第二步：选择输出文件夹
+        showFolderStatus(i18n.t('folder.selectOutput'), 'info');
+        const outputDirHandle = await window.showDirectoryPicker({
+            mode: 'readwrite'
+        });
+
+        // 处理所有图片并保存到指定位置
+        await processFolderImages(imageFiles, outputDirHandle);
+
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            // 用户取消选择，不显示错误
+            hideFolderStatus();
+            return;
+        }
+        console.error('Folder select error:', error);
+        showFolderStatus(i18n.t('folder.selectError'), 'error');
+    }
+}
+
+/**
+ * 收集文件夹中的图片文件（只处理顶层，跳过子文件夹）
+ */
+async function collectImageFiles(dirHandle, imageFiles) {
+    for await (const entry of dirHandle.values()) {
+        // 只处理文件，跳过子文件夹
+        if (entry.kind === 'file') {
+            const file = await entry.getFile();
+            if (file.type.match('image/(jpeg|png|webp)')) {
+                imageFiles.push({
+                    fileHandle: entry,
+                    file: file,
+                    name: file.name,
+                    path: file.name
+                });
+            }
+        }
+        // 跳过子文件夹，不做任何处理
+    }
+}
+
+/**
+ * 批量处理文件夹中的图片并保存到指定文件夹
+ */
+async function processFolderImages(imageFiles, outputDirHandle) {
+    showLoading(i18n.t('folder.processing'));
+    showFolderStatus(`${i18n.t('folder.processing')} 0/${imageFiles.length}`, 'info');
+
+    let processedCount = 0;
+    let errorCount = 0;
+    const failedFiles = []; // 记录失败的图片
+
+    // 并发处理，但限制并发数为 3
+    const concurrency = 3;
+    for (let i = 0; i < imageFiles.length; i += concurrency) {
+        const batch = imageFiles.slice(i, i + concurrency);
+
+        await Promise.all(batch.map(async (item) => {
+            try {
+                // 加载图片
+                const img = await loadImage(item.file);
+
+                // 移除水印
+                const resultCanvas = await engine.removeWatermarkFromImage(img);
+
+                // 获取处理后的 blob，保持原格式
+                const blob = await new Promise(resolve => {
+                    const mimeType = item.file.type === 'image/png' ? 'image/png' :
+                        item.file.type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+                    const quality = mimeType === 'image/jpeg' ? 0.95 : undefined;
+                    resultCanvas.toBlob(resolve, mimeType, quality);
+                });
+
+                // 保持原始文件名
+                const outputFileName = item.name;
+
+                // 在输出文件夹中创建文件并写入
+                const outputFileHandle = await outputDirHandle.getFileHandle(outputFileName, { create: true });
+                const writable = await outputFileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+
+                processedCount++;
+            } catch (error) {
+                console.error(`Error processing ${item.path}:`, error);
+                errorCount++;
+                failedFiles.push(item.path); // 记录失败的文件路径
+            }
+
+            // 更新进度
+            const currentProgress = processedCount + errorCount;
+            showFolderStatus(`${i18n.t('folder.processing')} ${currentProgress}/${imageFiles.length}`, 'info');
+        }));
+    }
+
+    hideLoading();
+
+    // 显示完成状态
+    const completeMessage = i18n.t('folder.complete').replace('{{count}}', processedCount.toString());
+    if (errorCount > 0) {
+        // 显示失败的文件列表
+        const failedList = failedFiles.join(', ');
+        showFolderStatus(`${completeMessage} | 失败(${errorCount}): ${failedList}`, 'error');
+    } else {
+        showFolderStatus(completeMessage, 'success');
+    }
+}
+
 init();
+

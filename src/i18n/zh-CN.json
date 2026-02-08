@@ -43,5 +43,13 @@
   "info.removed": "水印已移除",
   "original.not_gemini": "⚠️ 此图片非 Gemini 生成的原始图片，可能无法进行无损去水印",
   "original.not_original": "⚠️ 此图片非原始尺寸，可能无法进行无损去水印",
-  "original.pass": "✅ 此图片为 Gemini 生成的原始图片，可进行无损去水印"
+  "original.pass": "✅ 此图片为 Gemini 生成的原始图片，可进行无损去水印",
+  "btn.selectFolder": "选择文件夹批量处理",
+  "folder.processing": "正在处理文件夹...",
+  "folder.saving": "正在保存...",
+  "folder.complete": "已完成 {{count}} 张图片处理并保存",
+  "folder.notSupported": "您的浏览器不支持文件夹选择功能，请使用 Chrome 或 Edge 浏览器",
+  "folder.noImages": "文件夹中没有找到支持的图片文件",
+  "folder.selectError": "选择文件夹时出错",
+  "folder.selectOutput": "请选择保存位置"
 }
